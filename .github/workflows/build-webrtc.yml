@@ -1,0 +1,70 @@
+name: Build WebRTC M84
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          # 清理 C 盘占用空间的目录
+          Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Get-PSDrive C | Select-Object Used,Free
+
+      - name: Install depot_tools
+        shell: cmd
+        run: |
+          cd /d D:\
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo D:\depot_tools>> %GITHUB_PATH%
+
+      - name: Fetch WebRTC M84
+        shell: cmd
+        env:
+          DEPOT_TOOLS_WIN_TOOLCHAIN: 0
+          DEPOT_TOOLS_UPDATE: 0
+        run: |
+          cd /d D:\
+          mkdir webrtc
+          cd webrtc
+          call D:\depot_tools\fetch.bat --nohooks webrtc
+          cd src
+          call git checkout -b m84 branch-heads/4147
+          cd ..
+          call gclient sync --nohooks
+
+      - name: Build audio_processing
+        shell: cmd
+        run: |
+          cd /d D:\webrtc\src
+          call gn gen out/x86_mt --args="is_debug=false target_cpu=\"x86\" is_clang=false is_component_build=false rtc_build_examples=false rtc_build_tools=false rtc_include_tests=false use_custom_libcxx=false"
+          call ninja -C out/x86_mt audio_processing
+          call ninja -C out/x86_mt common_audio
+          call ninja -C out/x86_mt system_wrappers
+          call ninja -C out/x86_mt rtc_base
+
+      - name: Package libs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path D:\out | Out-Null
+          Get-ChildItem -Path D:\webrtc\src\out\x86_mt\obj -Recurse -Filter "*.lib" |
+            Copy-Item -Destination D:\out
+          Get-ChildItem D:\out | Select-Object Name,Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-m84-x86-mt-libs
+          path: D:\out\*.lib
+          retention-days: 30
