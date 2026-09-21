@@ -15,11 +15,12 @@ jobs:
       - name: Free disk space
         shell: pwsh
         run: |
-          # 清理 C 盘占用空间的目录
+          # 清理一些占空间的目录
           Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\Program Files\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
           Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
           Get-PSDrive C | Select-Object Used,Free
 
       - name: Install depot_tools
@@ -54,17 +55,48 @@ jobs:
           call ninja -C out/x86_mt system_wrappers
           call ninja -C out/x86_mt rtc_base
 
-      - name: Package libs
+      - name: Package libs and headers
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path D:\out | Out-Null
-          Get-ChildItem -Path D:\webrtc\src\out\x86_mt\obj -Recurse -Filter "*.lib" |
-            Copy-Item -Destination D:\out
-          Get-ChildItem D:\out | Select-Object Name,Length
+          $src = "D:\webrtc\src"
 
-      - name: Upload artifacts
+          # 1) 收集所有 .lib
+          New-Item -ItemType Directory -Force -Path D:\out\libs | Out-Null
+          Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
+            Copy-Item -Destination D:\out\libs
+
+          # 2) 收集所有 .h（全量拷贝，保持目录结构，避免漏文件）
+          $dst = "D:\out\headers"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          Get-ChildItem -Path $src -Recurse -Filter "*.h" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\out\\' } |
+            ForEach-Object {
+              $rel = $_.FullName.Substring($src.Length + 1)
+              $targetFile = Join-Path $dst $rel
+              $targetDir  = Split-Path $targetFile
+              if (!(Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+              }
+              Copy-Item $_.FullName -Destination $targetFile -Force
+            }
+
+          # 3) 打印概览
+          Write-Host "=== LIBS ==="
+          Get-ChildItem D:\out\libs | Select-Object Name,Length
+          Write-Host "=== HEADERS COUNT ==="
+          (Get-ChildItem D:\out\headers -Recurse -Filter *.h).Count
+
+      - name: Upload libs
         uses: actions/upload-artifact@v4
         with:
-          name: webrtc-m84-x86-mt-libs
-          path: D:\out\*.lib
+          name: webrtc-m84-libs
+          path: D:\out\libs\*.lib
+          retention-days: 30
+
+      - name: Upload headers
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-m84-headers
+          path: D:\out\headers
           retention-days: 30
