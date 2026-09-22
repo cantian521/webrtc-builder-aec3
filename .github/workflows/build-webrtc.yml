@@ -150,7 +150,7 @@ jobs:
       # ==========================================================
       # 8. 编译 audio_processing 及其依赖
       # ==========================================================
-        -name: Build audio_processing
+      - name: Build audio_processing
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
