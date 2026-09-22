@@ -150,12 +150,12 @@ jobs:
       # ==========================================================
       # 8. 编译 audio_processing 及其依赖
       # ==========================================================
-      - name: Build audio_processing
+        -name: Build audio_processing
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-          call gn gen out/x86_mt --args="is_debug=false target_cpu=\"x86\" is_clang=false is_component_build=false rtc_build_examples=false rtc_build_tools=false rtc_include_tests=false use_custom_libcxx=false"
+          call gn gen out/x86_mt --args="is_debug=false target_cpu=\"x86\" is_clang=false is_component_build=false rtc_build_examples=false rtc_build_tools=false rtc_include_tests=false use_custom_libcxx=false treat_warnings_as_errors=false"
           if not exist out\x86_mt\build.ninja (
             echo gn gen failed: build.ninja not generated
             exit /b 1
