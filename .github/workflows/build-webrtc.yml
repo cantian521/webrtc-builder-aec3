@@ -148,9 +148,9 @@ jobs:
         run: Get-PSDrive D | Select-Object Used,Free
 
       # ==========================================================
-      # 8. 编译 audio_processing 及其依赖
+      # 8. 生成构建配置
       # ==========================================================
-      - name: Build audio_processing
+      - name: gn gen
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
@@ -160,18 +160,59 @@ jobs:
             echo gn gen failed: build.ninja not generated
             exit /b 1
           )
-          call ninja -C out/x86_mt audio_processing
-          call ninja -C out/x86_mt common_audio
-          call ninja -C out/x86_mt system_wrappers
-          call ninja -C out/x86_mt rtc_base
+          echo gn gen OK
 
       # ==========================================================
-      # 9. 收集 .lib 和 .h
+      # 9. 列出 audio_processing 相关的 target（调试用）
+      # ==========================================================
+      - name: List audio_processing targets
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+          echo === audio_processing related targets ===
+          call gn ls out/x86_mt | findstr /i "audio_processing"
+          echo === done ===
+
+      # ==========================================================
+      # 10. 编译 audio_processing 及其依赖（用完整 target 路径）
+      # ==========================================================
+      - name: Build audio_processing
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+
+          :: 用完整 target 路径，避免 group 空操作
+          call ninja -C out/x86_mt modules/audio_processing:audio_processing
+
+          :: 明确编出每个子模块，保证 lib 一定被产出
+          call ninja -C out/x86_mt modules/audio_processing/aec3:aec3
+          call ninja -C out/x86_mt modules/audio_processing/agc:agc
+          call ninja -C out/x86_mt modules/audio_processing/agc2:agc2
+          call ninja -C out/x86_mt modules/audio_processing/ns:ns
+          call ninja -C out/x86_mt modules/audio_processing/utility:utility
+          call ninja -C out/x86_mt modules/audio_processing/transient:transient
+          call ninja -C out/x86_mt modules/audio_processing/vad:vad
+
+          :: 基础库
+          call ninja -C out/x86_mt common_audio:common_audio
+          call ninja -C out/x86_mt rtc_base:rtc_base
+          call ninja -C out/x86_mt system_wrappers:system_wrappers
+
+      # ==========================================================
+      # 11. 收集 .lib 和 .h
       # ==========================================================
       - name: Package libs and headers
         shell: pwsh
         run: |
           $src = "D:\webrtc\src"
+
+          # 打印所有编出来的 lib（调试用）
+          Write-Host "=== ALL LIBS IN OUT ==="
+          Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
+            Select-Object FullName, Length | Format-Table -AutoSize
+
           New-Item -ItemType Directory -Force -Path D:\out\libs | Out-Null
           Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
             Copy-Item -Destination D:\out\libs
@@ -190,13 +231,13 @@ jobs:
               Copy-Item $_.FullName -Destination $targetFile -Force
             }
 
-          Write-Host "=== LIBS ==="
-          Get-ChildItem D:\out\libs | Select-Object Name,Length
+          Write-Host "=== LIBS COUNT ==="
+          (Get-ChildItem D:\out\libs).Count
           Write-Host "=== HEADERS COUNT ==="
           (Get-ChildItem D:\out\headers -Recurse -Filter *.h).Count
 
       # ==========================================================
-      # 10. 上传 artifact
+      # 12. 上传 artifact
       # ==========================================================
       - name: Upload libs
         uses: actions/upload-artifact@v4
