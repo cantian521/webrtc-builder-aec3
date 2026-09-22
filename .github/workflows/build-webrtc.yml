@@ -6,21 +6,15 @@ on:
 jobs:
   build:
     runs-on: windows-2022
-    timeout-minutes: 240
+    timeout-minutes: 300
 
     env:
       DEPOT_TOOLS_WIN_TOOLCHAIN: 0
 
     steps:
-      # ==========================================================
-      # 1. 拉取仓库内容
-      # ==========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ==========================================================
-      # 2. 清理磁盘空间
-      # ==========================================================
       - name: Free disk space
         shell: pwsh
         run: |
@@ -31,9 +25,6 @@ jobs:
           Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
           Get-PSDrive C | Select-Object Used,Free
 
-      # ==========================================================
-      # 3. 配置 Git 全局
-      # ==========================================================
       - name: Configure Git global
         shell: cmd
         run: |
@@ -42,11 +33,7 @@ jobs:
           git config --global core.autocrlf false
           git config --global core.filemode false
           git config --global core.fscache true
-          git config --global --list
 
-      # ==========================================================
-      # 4. 安装 depot_tools
-      # ==========================================================
       - name: Install depot_tools
         shell: cmd
         run: |
@@ -54,11 +41,7 @@ jobs:
           if exist depot_tools rmdir /s /q depot_tools
           git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
           echo D:\depot_tools>> %GITHUB_PATH%
-          echo Depot tools installed
 
-      # ==========================================================
-      # 5. Bootstrap depot_tools
-      # ==========================================================
       - name: Bootstrap depot_tools
         shell: cmd
         run: |
@@ -66,16 +49,11 @@ jobs:
           cd /d D:\depot_tools
           call update_depot_tools.bat
           if not exist python3_bin_reldir.txt (
-            echo Bootstrap failed: python3_bin_reldir.txt not found
+            echo Bootstrap failed
             exit /b 1
           )
-          echo === depot_tools content ===
-          dir vpython* python3* 2>nul
           echo Bootstrap OK
 
-      # ==========================================================
-      # 6. 拉取 WebRTC M100 源码 + 依赖
-      # ==========================================================
       - name: Fetch WebRTC M100
         shell: cmd
         env:
@@ -89,8 +67,6 @@ jobs:
             echo @echo off > D:\depot_tools\vpython.bat
             echo call "%%~dp0python3.bat" %%* >> D:\depot_tools\vpython.bat
           )
-          echo === vpython.bat ===
-          type D:\depot_tools\vpython.bat
 
           cd /d D:\
           if exist webrtc rmdir /s /q webrtc
@@ -103,19 +79,14 @@ jobs:
           if %errorlevel% neq 0 (
             set /a RETRY+=1
             if !RETRY! lss 3 (
-              echo Fetch failed, retrying...
               timeout /t 10 /nobreak
               goto fetch_loop
             ) else (
-              echo Fetch failed after 3 attempts.
               exit /b 1
             )
           )
 
-          if not exist src\DEPS (
-            echo fetch failed: src\DEPS not found
-            exit /b 1
-          )
+          if not exist src\DEPS exit /b 1
 
           cd src
           call git checkout -b m100 branch-heads/4896
@@ -127,11 +98,9 @@ jobs:
           if %errorlevel% neq 0 (
             set /a RETRY+=1
             if !RETRY! lss 3 (
-              echo gclient sync failed, retrying...
               timeout /t 10 /nobreak
               goto sync_loop
             ) else (
-              echo gclient sync failed after 3 attempts.
               exit /b 1
             )
           )
@@ -140,75 +109,28 @@ jobs:
           echo === runhooks exit code: %errorlevel% (ignored) ===
           exit /b 0
 
-      # ==========================================================
-      # 7. 编译前检查磁盘空间
-      # ==========================================================
-      - name: Check disk space before build
-        shell: pwsh
-        run: Get-PSDrive D | Select-Object Used,Free
-
-      # ==========================================================
-      # 8. 生成构建配置
-      # ==========================================================
       - name: gn gen
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
           call gn gen out/x86_mt --args="is_debug=false target_cpu=\"x86\" is_clang=false is_component_build=false rtc_build_examples=false rtc_build_tools=false rtc_include_tests=false use_custom_libcxx=false treat_warnings_as_errors=false"
-          if not exist out\x86_mt\build.ninja (
-            echo gn gen failed: build.ninja not generated
-            exit /b 1
-          )
+          if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ==========================================================
-      # 9. 列出 audio_processing 相关的 target（调试用）
-      # ==========================================================
-      - name: List audio_processing targets
+      # ★★★ 唯一改动：直接编所有 target
+      - name: Build all
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-          echo === audio_processing related targets ===
-          call gn ls out/x86_mt | findstr /i "audio_processing"
-          echo === done ===
+          call ninja -C out/x86_mt
 
-      # ==========================================================
-      # 10. 编译 audio_processing 及其依赖（用完整 target 路径）
-      # ==========================================================
-      - name: Build audio_processing
-        shell: cmd
-        run: |
-          set PATH=D:\depot_tools;%PATH%
-          cd /d D:\webrtc\src
-
-          :: 用完整 target 路径，避免 group 空操作
-          call ninja -C out/x86_mt modules/audio_processing:audio_processing
-
-          :: 明确编出每个子模块，保证 lib 一定被产出
-          call ninja -C out/x86_mt modules/audio_processing/aec3:aec3
-          call ninja -C out/x86_mt modules/audio_processing/agc:agc
-          call ninja -C out/x86_mt modules/audio_processing/agc2:agc2
-          call ninja -C out/x86_mt modules/audio_processing/ns:ns
-          call ninja -C out/x86_mt modules/audio_processing/utility:utility
-          call ninja -C out/x86_mt modules/audio_processing/transient:transient
-          call ninja -C out/x86_mt modules/audio_processing/vad:vad
-
-          :: 基础库
-          call ninja -C out/x86_mt common_audio:common_audio
-          call ninja -C out/x86_mt rtc_base:rtc_base
-          call ninja -C out/x86_mt system_wrappers:system_wrappers
-
-      # ==========================================================
-      # 11. 收集 .lib 和 .h
-      # ==========================================================
       - name: Package libs and headers
         shell: pwsh
         run: |
           $src = "D:\webrtc\src"
 
-          # 打印所有编出来的 lib（调试用）
           Write-Host "=== ALL LIBS IN OUT ==="
           Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
             Select-Object FullName, Length | Format-Table -AutoSize
@@ -233,12 +155,11 @@ jobs:
 
           Write-Host "=== LIBS COUNT ==="
           (Get-ChildItem D:\out\libs).Count
-          Write-Host "=== HEADERS COUNT ==="
-          (Get-ChildItem D:\out\headers -Recurse -Filter *.h).Count
 
-      # ==========================================================
-      # 12. 上传 artifact
-      # ==========================================================
+          Write-Host "=== 关键 lib 检查 ==="
+          Get-ChildItem D:\out\libs -Filter "*audio_processing*" | Select-Object Name
+          Get-ChildItem D:\out\libs -Filter "*aec3*" | Select-Object Name
+
       - name: Upload libs
         uses: actions/upload-artifact@v4
         with:
