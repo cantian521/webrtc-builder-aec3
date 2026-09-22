@@ -1,11 +1,11 @@
-name: Build WebRTC M84
+name: Build WebRTC M100
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-2019
+    runs-on: windows-2022
     timeout-minutes: 240
 
     env:
@@ -74,9 +74,9 @@ jobs:
           echo Bootstrap OK
 
       # ==========================================================
-      # 6. 拉取 WebRTC M84 源码 + 依赖
+      # 6. 拉取 WebRTC M100 源码 + 依赖
       # ==========================================================
-      - name: Fetch WebRTC M84
+      - name: Fetch WebRTC M100
         shell: cmd
         env:
           DEPOT_TOOLS_UPDATE: 0
@@ -85,7 +85,6 @@ jobs:
           set VPATH=D:\depot_tools
           set PYTHONPATH=D:\depot_tools;%PYTHONPATH%
 
-          :: ★ 创建 vpython.bat 包装（M84 老 hook 需要）
           if not exist D:\depot_tools\vpython.bat (
             echo @echo off > D:\depot_tools\vpython.bat
             echo call "%%~dp0python3.bat" %%* >> D:\depot_tools\vpython.bat
@@ -119,7 +118,7 @@ jobs:
           )
 
           cd src
-          call git checkout -b m84 branch-heads/4147
+          call git checkout -b m100 branch-heads/4896
           cd ..
 
           set RETRY=0
@@ -137,7 +136,6 @@ jobs:
             )
           )
 
-          :: ★ runhooks 失败不阻断（rc.exe 等对 audio_processing 无用）
           call gclient runhooks
           echo === runhooks exit code: %errorlevel% (ignored) ===
           exit /b 0
@@ -203,13 +201,13 @@ jobs:
       - name: Upload libs
         uses: actions/upload-artifact@v4
         with:
-          name: webrtc-m84-libs
+          name: webrtc-m100-libs
           path: D:\out\libs\*.lib
           retention-days: 30
 
       - name: Upload headers
         uses: actions/upload-artifact@v4
         with:
-          name: webrtc-m84-headers
+          name: webrtc-m100-headers
           path: D:\out\headers
           retention-days: 30
