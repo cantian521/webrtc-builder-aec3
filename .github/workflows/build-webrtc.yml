@@ -12,9 +12,15 @@ jobs:
       DEPOT_TOOLS_WIN_TOOLCHAIN: 0
 
     steps:
+      # ==========================================================
+      # 1. 拉取仓库内容
+      # ==========================================================
       - name: Checkout
         uses: actions/checkout@v4
 
+      # ==========================================================
+      # 2. 清理磁盘空间
+      # ==========================================================
       - name: Free disk space
         shell: pwsh
         run: |
@@ -25,6 +31,9 @@ jobs:
           Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
           Get-PSDrive C | Select-Object Used,Free
 
+      # ==========================================================
+      # 3. 配置 Git 全局
+      # ==========================================================
       - name: Configure Git global
         shell: cmd
         run: |
@@ -35,6 +44,9 @@ jobs:
           git config --global core.fscache true
           git config --global --list
 
+      # ==========================================================
+      # 4. 安装 depot_tools
+      # ==========================================================
       - name: Install depot_tools
         shell: cmd
         run: |
@@ -44,6 +56,9 @@ jobs:
           echo D:\depot_tools>> %GITHUB_PATH%
           echo Depot tools installed
 
+      # ==========================================================
+      # 5. Bootstrap depot_tools
+      # ==========================================================
       - name: Bootstrap depot_tools
         shell: cmd
         run: |
@@ -58,6 +73,9 @@ jobs:
           dir vpython* python3* 2>nul
           echo Bootstrap OK
 
+      # ==========================================================
+      # 6. 拉取 WebRTC M84 源码 + 依赖
+      # ==========================================================
       - name: Fetch WebRTC M84
         shell: cmd
         env:
@@ -67,7 +85,7 @@ jobs:
           set VPATH=D:\depot_tools
           set PYTHONPATH=D:\depot_tools;%PYTHONPATH%
 
-          :: ★ 关键修复：创建 vpython.bat 包装
+          :: ★ 创建 vpython.bat 包装（M84 老 hook 需要）
           if not exist D:\depot_tools\vpython.bat (
             echo @echo off > D:\depot_tools\vpython.bat
             echo call "%%~dp0python3.bat" %%* >> D:\depot_tools\vpython.bat
@@ -119,14 +137,21 @@ jobs:
             )
           )
 
-          :: runhooks 可能因为 rc.exe 下载失败报错，但那个 rc.exe 对 audio_processing 无用
+          :: ★ runhooks 失败不阻断（rc.exe 等对 audio_processing 无用）
           call gclient runhooks
-          echo === runhooks exit code: %errorlevel% ===
+          echo === runhooks exit code: %errorlevel% (ignored) ===
+          exit /b 0
 
+      # ==========================================================
+      # 7. 编译前检查磁盘空间
+      # ==========================================================
       - name: Check disk space before build
         shell: pwsh
         run: Get-PSDrive D | Select-Object Used,Free
 
+      # ==========================================================
+      # 8. 编译 audio_processing 及其依赖
+      # ==========================================================
       - name: Build audio_processing
         shell: cmd
         run: |
@@ -142,6 +167,9 @@ jobs:
           call ninja -C out/x86_mt system_wrappers
           call ninja -C out/x86_mt rtc_base
 
+      # ==========================================================
+      # 9. 收集 .lib 和 .h
+      # ==========================================================
       - name: Package libs and headers
         shell: pwsh
         run: |
@@ -169,6 +197,9 @@ jobs:
           Write-Host "=== HEADERS COUNT ==="
           (Get-ChildItem D:\out\headers -Recurse -Filter *.h).Count
 
+      # ==========================================================
+      # 10. 上传 artifact
+      # ==========================================================
       - name: Upload libs
         uses: actions/upload-artifact@v4
         with:
