@@ -121,7 +121,6 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 用正确的 target 名（冒号分隔）
       - name: Build all + extras
         shell: cmd
         run: |
@@ -142,9 +141,50 @@ jobs:
           call ninja -k 0 -C out/x86_mt modules/audio_processing:audio_processing
 
           echo === extras done ===
+          exit /b 0
+
+      # ★★★ 新增：诊断 + 打包
+      - name: Diagnose and pack missing symbols
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src\out\x86_mt
+
+          echo ============================================================
+          echo [1] 诊断：这些 .obj 到底存在不存在？
+          echo ============================================================
+          echo --- rms_level.obj ---
+          dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul
+
+          echo --- throw_delegate.obj ---
+          dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul
+
+          echo --- bad_optional_access.obj ---
+          dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul
+
+          echo --- rnnoise 下所有 obj ---
+          dir /s /b obj\third_party\rnnoise\*.obj 2>nul
+
           echo.
-          echo ========== FAILED files (default target) ==========
-          type D:\build.log | findstr /c:"FAILED:"
+          echo ============================================================
+          echo [2] 把找到的 .obj 打包成 webrtc_missing.lib
+          echo ============================================================
+          set OBJFILE=objs_for_missing.txt
+          if exist %OBJFILE% del %OBJFILE%
+
+          dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul >> %OBJFILE%
+          dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul >> %OBJFILE%
+          dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul >> %OBJFILE%
+          dir /s /b obj\third_party\rnnoise\*.obj 2>nul >> %OBJFILE%
+
+          echo ===== objs_for_missing.txt =====
+          type %OBJFILE%
+
+          if not exist D:\out\libs mkdir D:\out\libs
+          lib /OUT:D:\out\libs\webrtc_missing.lib @%OBJFILE%
+          echo ===== webrtc_missing.lib created =====
+          dir D:\out\libs\webrtc_missing.lib
+
           exit /b 0
 
       - name: Package libs and headers
@@ -174,32 +214,17 @@ jobs:
           (Get-ChildItem D:\out\libs).Count
 
           Write-Host ""
-          Write-Host "=== 关键符号逐个检查 ==="
-          $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
-          $symbols = @(
-            "InternalAPMConfig",
-            "RmsLevel",
-            "AnalogGainStatsReporter",
-            "CaptureLevelsAdjuster",
-            "ThrowStdOutOfRange",
-            "throw_bad_optional_access",
-            "kInputDenseWeights",
-            "DenormalDisabler",
-            "WebRtcAecm_Create",
-            "WebRtcAgc_Create"
-          )
-          foreach ($sym in $symbols) {
-            $found = $false
-            foreach ($lib in Get-ChildItem D:\out\libs -Filter "*.lib") {
-              if (-not $found) {
-                $hit = & $dumpbin /linkermember $lib.FullName 2>$null | Select-String -SimpleMatch $sym -Quiet
-                if ($hit) {
-                  Write-Host "FOUND $sym in: $($lib.Name)"
-                  $found = $true
-                }
-              }
+          Write-Host "=== webrtc_missing.lib 里的符号检查 ==="
+          if (Test-Path "D:\out\libs\webrtc_missing.lib") {
+            $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
+            $syms = @("RmsLevel", "ThrowStdOutOfRange", "throw_bad_optional_access", "kInputDenseWeights")
+            foreach ($s in $syms) {
+              $hit = & $dumpbin /linkermember "D:\out\libs\webrtc_missing.lib" 2>$null | Select-String -SimpleMatch $s -Quiet
+              if ($hit) { Write-Host "FOUND $s in webrtc_missing.lib" }
+              else { Write-Host "MISSING $s" }
             }
-            if (-not $found) { Write-Host "MISSING: $sym" }
+          } else {
+            Write-Host "webrtc_missing.lib 没生成"
           }
 
       - name: Upload libs
