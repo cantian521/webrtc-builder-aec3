@@ -122,47 +122,20 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 新增：打印目录结构和 target
-      - name: Dump WebRTC structure and targets
-        shell: pwsh
-        run: |
-          $src = "D:\webrtc\src"
-          $env:PATH = "D:\depot_tools;$env:PATH"
-          Set-Location $src
-
-          Write-Host "========== modules/audio_processing 子目录 =========="
-          Get-ChildItem -Path "$src\modules\audio_processing" -Directory | Select-Object Name
-
-          Write-Host ""
-          Write-Host "========== 所有 BUILD.gn (modules/audio_processing) =========="
-          Get-ChildItem -Path "$src\modules\audio_processing" -Recurse -Filter "BUILD.gn" |
-            Select-Object FullName
-
-          Write-Host ""
-          Write-Host "========== gn ls: audio_processing targets =========="
-          & gn ls out/x86_mt | Select-String "audio_processing" | ForEach-Object { Write-Host $_.Line }
-
-          Write-Host ""
-          Write-Host "========== gn ls: absl targets =========="
-          & gn ls out/x86_mt | Select-String "absl" | ForEach-Object { Write-Host $_.Line }
-
-          Write-Host ""
-          Write-Host "========== gn ls: rnnoise targets =========="
-          & gn ls out/x86_mt | Select-String "rnnoise" | ForEach-Object { Write-Host $_.Line }
-
-          Write-Host ""
-          Write-Host "========== gn ls: third_party 主要目录 =========="
-          Get-ChildItem -Path "$src\third_party" -Directory |
-            Where-Object { $_.Name -match "abseil|rnnoise|json|protobuf|opus" } |
-            Select-Object Name
-
+      # ★★★ 编所有 target，保存日志，打印失败列表
       - name: Build all
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-          call ninja -k 0 -C out/x86_mt
-          echo === ninja exit code: %errorlevel% (ignored) ===
+          call ninja -k 0 -C out/x86_mt > D:\build.log 2>&1
+          echo === ninja done, exit code: %errorlevel% (ignored) ===
+          echo.
+          echo ========== FAILED files ==========
+          type D:\build.log | findstr /n /i "FAILED:"
+          echo.
+          echo ========== error C lines ==========
+          type D:\build.log | findstr /n /i "error C"
           exit /b 0
 
       - name: Package libs and headers
@@ -219,6 +192,12 @@ jobs:
             }
             if (-not $found) { Write-Host "MISSING: $sym" }
           }
+
+          Write-Host ""
+          Write-Host "=== absl / rnnoise / rms 相关 lib 列表 ==="
+          Get-ChildItem D:\out\libs | Where-Object {
+            $_.Name -match "absl|rnnoise|rms|rnn_vad"
+          } | Select-Object Name,Length
 
       - name: Upload libs
         uses: actions/upload-artifact@v4
