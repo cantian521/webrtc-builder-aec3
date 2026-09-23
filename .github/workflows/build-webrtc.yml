@@ -106,7 +106,6 @@ jobs:
           echo === runhooks exit code: %errorlevel% (ignored) ===
           exit /b 0
 
-      # ★★★ 新增：patch pffft 的 BUILD.gn，去掉 GNU 风格的参数
       - name: Patch pffft BUILD.gn
         shell: pwsh
         run: |
@@ -117,9 +116,20 @@ jobs:
             $content = $content -replace '-Wno-shadow', ''
             Set-Content $path $content -NoNewline
             Write-Host "=== Patched pffft BUILD.gn ==="
-            Get-Content $path | Select-String -Pattern "cflags|shadow|Wno" -Context 0,2
-          } else {
-            Write-Host "pffft BUILD.gn not found: $path"
+          }
+
+      # ★★★ 新增：把 C++ 标准升到 C++20
+      - name: Patch C++ standard to C++20
+        shell: pwsh
+        run: |
+          $path = "D:\webrtc\src\build\config\compiler\BUILD.gn"
+          if (Test-Path $path) {
+            $content = Get-Content $path -Raw
+            $content = $content -replace '/std:c\+\+17', '/std:c++20'
+            $content = $content -replace '-std=c\+\+17', '-std=c++20'
+            Set-Content $path $content -NoNewline
+            Write-Host "=== Patched C++ standard ==="
+            Get-Content $path | Select-String -Pattern "c\+\+17|c\+\+20"
           }
 
       - name: gn gen
@@ -167,7 +177,7 @@ jobs:
           Write-Host "=== LIBS COUNT ==="
           (Get-ChildItem D:\out\libs).Count
 
-          Write-Host "=== audio_processing 相关 lib ==="
+          Write-Host "=== audio_processing / aec3 相关 ==="
           Get-ChildItem D:\out\libs -Filter "*audio_processing*" | Select-Object Name
           Get-ChildItem D:\out\libs -Filter "*aec3*" | Select-Object Name
 
