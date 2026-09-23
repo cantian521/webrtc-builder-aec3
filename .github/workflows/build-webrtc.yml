@@ -99,7 +99,6 @@ jobs:
           )
 
           call gclient runhooks
-          echo === runhooks exit code: %errorlevel% (ignored) ===
           exit /b 0
 
       - name: Patch pffft BUILD.gn
@@ -122,20 +121,40 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 编所有 target，保存日志，打印失败列表
-      - name: Build all
+      # ★★★ 打印 abseil / rnnoise / rms 相关的所有 target（关键排查信息）
+      - name: List abseil / rnnoise / rms targets
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
+          echo ========== abseil targets ==========
+          call gn ls out/x86_mt | findstr /i "abseil"
+          echo ========== rnnoise targets ==========
+          call gn ls out/x86_mt | findstr /i "rnnoise"
+          echo ========== rms targets ==========
+          call gn ls out/x86_mt | findstr /i "rms"
+          echo ========== done ==========
+
+      # ★★★ 编 default + 缺失符号的 extras
+      - name: Build all + extras
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+
           call ninja -k 0 -C out/x86_mt > D:\build.log 2>&1
-          echo === ninja done, exit code: %errorlevel% (ignored) ===
+          echo === default target done ===
+
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp
+          call ninja -k 0 -C out/x86_mt third_party/rnnoise
+          call ninja -k 0 -C out/x86_mt modules/audio_processing
+          call ninja -k 0 -C out/x86_mt modules/audio_processing/rms_level
+          call ninja -k 0 -C out/x86_mt modules/audio_processing/utility
+
+          echo === extras done ===
           echo.
-          echo ========== FAILED files ==========
-          type D:\build.log | findstr /n /i "FAILED:"
-          echo.
-          echo ========== error C lines ==========
-          type D:\build.log | findstr /n /i "error C"
+          echo ========== FAILED files (default target) ==========
+          type D:\build.log | findstr /c:"FAILED:"
           exit /b 0
 
       - name: Package libs and headers
