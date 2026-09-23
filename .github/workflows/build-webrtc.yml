@@ -48,10 +48,7 @@ jobs:
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\depot_tools
           call update_depot_tools.bat
-          if not exist python3_bin_reldir.txt (
-            echo Bootstrap failed
-            exit /b 1
-          )
+          if not exist python3_bin_reldir.txt exit /b 1
           echo Bootstrap OK
 
       - name: Fetch WebRTC M100
@@ -109,6 +106,22 @@ jobs:
           echo === runhooks exit code: %errorlevel% (ignored) ===
           exit /b 0
 
+      # ★★★ 新增：patch pffft 的 BUILD.gn，去掉 GNU 风格的参数
+      - name: Patch pffft BUILD.gn
+        shell: pwsh
+        run: |
+          $path = "D:\webrtc\src\third_party\pffft\BUILD.gn"
+          if (Test-Path $path) {
+            $content = Get-Content $path -Raw
+            $content = $content -replace '"-Wno-shadow",?', ''
+            $content = $content -replace '-Wno-shadow', ''
+            Set-Content $path $content -NoNewline
+            Write-Host "=== Patched pffft BUILD.gn ==="
+            Get-Content $path | Select-String -Pattern "cflags|shadow|Wno" -Context 0,2
+          } else {
+            Write-Host "pffft BUILD.gn not found: $path"
+          }
+
       - name: gn gen
         shell: cmd
         run: |
@@ -118,7 +131,6 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 唯一改动：直接编所有 target
       - name: Build all
         shell: cmd
         run: |
@@ -131,9 +143,8 @@ jobs:
         run: |
           $src = "D:\webrtc\src"
 
-          Write-Host "=== ALL LIBS IN OUT ==="
-          Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
-            Select-Object FullName, Length | Format-Table -AutoSize
+          Write-Host "=== ALL LIBS COUNT ==="
+          (Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib").Count
 
           New-Item -ItemType Directory -Force -Path D:\out\libs | Out-Null
           Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
@@ -156,7 +167,7 @@ jobs:
           Write-Host "=== LIBS COUNT ==="
           (Get-ChildItem D:\out\libs).Count
 
-          Write-Host "=== 关键 lib 检查 ==="
+          Write-Host "=== audio_processing 相关 lib ==="
           Get-ChildItem D:\out\libs -Filter "*audio_processing*" | Select-Object Name
           Get-ChildItem D:\out\libs -Filter "*aec3*" | Select-Object Name
 
