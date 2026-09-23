@@ -122,33 +122,48 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 编所有需要的 target
-      - name: Build all needed targets
+      # ★★★ 新增：打印目录结构和 target
+      - name: Dump WebRTC structure and targets
+        shell: pwsh
+        run: |
+          $src = "D:\webrtc\src"
+          $env:PATH = "D:\depot_tools;$env:PATH"
+          Set-Location $src
+
+          Write-Host "========== modules/audio_processing 子目录 =========="
+          Get-ChildItem -Path "$src\modules\audio_processing" -Directory | Select-Object Name
+
+          Write-Host ""
+          Write-Host "========== 所有 BUILD.gn (modules/audio_processing) =========="
+          Get-ChildItem -Path "$src\modules\audio_processing" -Recurse -Filter "BUILD.gn" |
+            Select-Object FullName
+
+          Write-Host ""
+          Write-Host "========== gn ls: audio_processing targets =========="
+          & gn ls out/x86_mt | Select-String "audio_processing" | ForEach-Object { Write-Host $_.Line }
+
+          Write-Host ""
+          Write-Host "========== gn ls: absl targets =========="
+          & gn ls out/x86_mt | Select-String "absl" | ForEach-Object { Write-Host $_.Line }
+
+          Write-Host ""
+          Write-Host "========== gn ls: rnnoise targets =========="
+          & gn ls out/x86_mt | Select-String "rnnoise" | ForEach-Object { Write-Host $_.Line }
+
+          Write-Host ""
+          Write-Host "========== gn ls: third_party 主要目录 =========="
+          Get-ChildItem -Path "$src\third_party" -Directory |
+            Where-Object { $_.Name -match "abseil|rnnoise|json|protobuf|opus" } |
+            Select-Object Name
+
+      - name: Build all
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-
-          call ninja -k 0 -C out/x86_mt modules/audio_processing
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/aec
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/aecm
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/aec3
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/agc
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/agc2
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/ns
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/vad
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/transient
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/utility
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/aec_dump
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp
-          call ninja -k 0 -C out/x86_mt third_party/rnnoise
-          call ninja -k 0 -C out/x86_mt common_audio
-          call ninja -k 0 -C out/x86_mt rtc_base
-          call ninja -k 0 -C out/x86_mt system_wrappers
-          call ninja -k 0 -C out/x86_mt api
-          call ninja -k 0 -C out/x86_mt modules/audio_coding
-
-          echo === Build done ===
+          call ninja -k 0 -C out/x86_mt
+          echo === ninja exit code: %errorlevel% (ignored) ===
+          exit /b 0
 
       - name: Package libs and headers
         shell: pwsh
@@ -176,18 +191,33 @@ jobs:
           Write-Host "=== LIBS COUNT ==="
           (Get-ChildItem D:\out\libs).Count
 
-          Write-Host "=== absl 相关 lib ==="
-          Get-ChildItem D:\out\libs -Filter "absl*" | Select-Object Name
-          Get-ChildItem D:\out\libs -Filter "*abseil*" | Select-Object Name
-
-          Write-Host "=== audio_processing / aec / rnnoise 相关 ==="
-          Get-ChildItem D:\out\libs | Where-Object { $_.Name -match "audio_processing|aec|rnnoise|rnn|agc|ns|vad" } | Select-Object Name,Length
-
-          Write-Host "=== 关键符号检查 ==="
+          Write-Host ""
+          Write-Host "=== 关键符号逐个检查 ==="
           $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
-          Get-ChildItem D:\out\libs -Filter "*.lib" | ForEach-Object {
-            $r = & $dumpbin /linkermember $_.FullName 2>$null | Select-String "InternalAPMConfig|ThrowStdOutOfRange|kInputDenseWeights"
-            if ($r) { Write-Host "FOUND: $($_.Name)" }
+          $symbols = @(
+            "InternalAPMConfig",
+            "RmsLevel",
+            "AnalogGainStatsReporter",
+            "CaptureLevelsAdjuster",
+            "ThrowStdOutOfRange",
+            "throw_bad_optional_access",
+            "kInputDenseWeights",
+            "DenormalDisabler",
+            "WebRtcAecm_Create",
+            "WebRtcAgc_Create"
+          )
+          foreach ($sym in $symbols) {
+            $found = $false
+            foreach ($lib in Get-ChildItem D:\out\libs -Filter "*.lib") {
+              if (-not $found) {
+                $hit = & $dumpbin /linkermember $lib.FullName 2>$null | Select-String -SimpleMatch $sym -Quiet
+                if ($hit) {
+                  Write-Host "FOUND $sym in: $($lib.Name)"
+                  $found = $true
+                }
+              }
+            }
+            if (-not $found) { Write-Host "MISSING: $sym" }
           }
 
       - name: Upload libs
