@@ -121,21 +121,7 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      # ★★★ 打印 abseil / rnnoise / rms 相关的所有 target（关键排查信息）
-      - name: List abseil / rnnoise / rms targets
-        shell: cmd
-        run: |
-          set PATH=D:\depot_tools;%PATH%
-          cd /d D:\webrtc\src
-          echo ========== abseil targets ==========
-          call gn ls out/x86_mt | findstr /i "abseil"
-          echo ========== rnnoise targets ==========
-          call gn ls out/x86_mt | findstr /i "rnnoise"
-          echo ========== rms targets ==========
-          call gn ls out/x86_mt | findstr /i "rms"
-          echo ========== done ==========
-
-      # ★★★ 编 default + 缺失符号的 extras
+      # ★★★ 用正确的 target 名（冒号分隔）
       - name: Build all + extras
         shell: cmd
         run: |
@@ -145,11 +131,15 @@ jobs:
           call ninja -k 0 -C out/x86_mt > D:\build.log 2>&1
           echo === default target done ===
 
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp
-          call ninja -k 0 -C out/x86_mt third_party/rnnoise
-          call ninja -k 0 -C out/x86_mt modules/audio_processing
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/rms_level
-          call ninja -k 0 -C out/x86_mt modules/audio_processing/utility
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:throw_delegate
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/types:bad_optional_access
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/strings:strings
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:base
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/numeric:int128
+          call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnnoise
+          call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnn_vad
+          call ninja -k 0 -C out/x86_mt modules/audio_processing:rms_level
+          call ninja -k 0 -C out/x86_mt modules/audio_processing:audio_processing
 
           echo === extras done ===
           echo.
@@ -211,12 +201,6 @@ jobs:
             }
             if (-not $found) { Write-Host "MISSING: $sym" }
           }
-
-          Write-Host ""
-          Write-Host "=== absl / rnnoise / rms 相关 lib 列表 ==="
-          Get-ChildItem D:\out\libs | Where-Object {
-            $_.Name -match "absl|rnnoise|rms|rnn_vad"
-          } | Select-Object Name,Length
 
       - name: Upload libs
         uses: actions/upload-artifact@v4
