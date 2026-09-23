@@ -143,7 +143,7 @@ jobs:
           echo === extras done ===
           exit /b 0
 
-      # ★★★ 新增：诊断 + 打包
+      # ★★★ 关键修复：用完整路径调用 lib.exe
       - name: Diagnose and pack missing symbols
         shell: cmd
         run: |
@@ -151,27 +151,29 @@ jobs:
           cd /d D:\webrtc\src\out\x86_mt
 
           echo ============================================================
-          echo [1] 诊断：这些 .obj 到底存在不存在？
+          echo [1] 诊断 .obj 是否存在
           echo ============================================================
-          echo --- rms_level.obj ---
           dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul
-
-          echo --- throw_delegate.obj ---
           dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul
-
-          echo --- bad_optional_access.obj ---
           dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul
-
-          echo --- rnnoise 下所有 obj ---
           dir /s /b obj\third_party\rnnoise\*.obj 2>nul
 
           echo.
           echo ============================================================
-          echo [2] 把找到的 .obj 打包成 webrtc_missing.lib
+          echo [2] 找 lib.exe 的完整路径
+          echo ============================================================
+          set LIBCMD=
+          for /f "delims=" %%i in ('dir /s /b "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x86\lib.exe" 2^>nul') do (
+            if not defined LIBCMD set LIBCMD=%%i
+          )
+          echo LIBCMD=%LIBCMD%
+
+          echo.
+          echo ============================================================
+          echo [3] 打包 webrtc_missing.lib
           echo ============================================================
           set OBJFILE=objs_for_missing.txt
           if exist %OBJFILE% del %OBJFILE%
-
           dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul >> %OBJFILE%
           dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul >> %OBJFILE%
           dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul >> %OBJFILE%
@@ -181,9 +183,22 @@ jobs:
           type %OBJFILE%
 
           if not exist D:\out\libs mkdir D:\out\libs
-          lib /OUT:D:\out\libs\webrtc_missing.lib @%OBJFILE%
-          echo ===== webrtc_missing.lib created =====
-          dir D:\out\libs\webrtc_missing.lib
+          if not exist D:\out\objs mkdir D:\out\objs
+
+          "%LIBCMD%" /OUT:D:\out\libs\webrtc_missing.lib @%OBJFILE%
+          echo ===== lib.exe exit code: %errorlevel% =====
+
+          :: 同时把 .obj 复制到 artifact，作为备份
+          copy /y obj\modules\audio_processing\rms_level\rms_level.obj D:\out\objs\ 2>nul
+          copy /y obj\third_party\abseil-cpp\absl\base\throw_delegate\throw_delegate.obj D:\out\objs\ 2>nul
+          copy /y obj\third_party\abseil-cpp\absl\types\bad_optional_access\bad_optional_access.obj D:\out\objs\ 2>nul
+          copy /y obj\third_party\rnnoise\rnn_vad\rnn_vad_weights.obj D:\out\objs\ 2>nul
+
+          echo.
+          echo ===== D:\out\libs\webrtc_missing.lib =====
+          dir D:\out\libs\webrtc_missing.lib 2>nul
+          echo ===== D:\out\objs =====
+          dir D:\out\objs
 
           exit /b 0
 
@@ -214,7 +229,7 @@ jobs:
           (Get-ChildItem D:\out\libs).Count
 
           Write-Host ""
-          Write-Host "=== webrtc_missing.lib 里的符号检查 ==="
+          Write-Host "=== webrtc_missing.lib 符号检查 ==="
           if (Test-Path "D:\out\libs\webrtc_missing.lib") {
             $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
             $syms = @("RmsLevel", "ThrowStdOutOfRange", "throw_bad_optional_access", "kInputDenseWeights")
@@ -224,7 +239,7 @@ jobs:
               else { Write-Host "MISSING $s" }
             }
           } else {
-            Write-Host "webrtc_missing.lib 没生成"
+            Write-Host "webrtc_missing.lib 未生成"
           }
 
       - name: Upload libs
@@ -232,6 +247,13 @@ jobs:
         with:
           name: webrtc-m100-libs
           path: D:\out\libs\*.lib
+          retention-days: 30
+
+      - name: Upload objs (backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-missing-objs
+          path: D:\out\objs
           retention-days: 30
 
       - name: Upload headers
