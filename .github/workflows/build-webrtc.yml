@@ -78,9 +78,7 @@ jobs:
             if !RETRY! lss 3 (
               timeout /t 10 /nobreak
               goto fetch_loop
-            ) else (
-              exit /b 1
-            )
+            ) else exit /b 1
           )
 
           if not exist src\DEPS exit /b 1
@@ -97,9 +95,7 @@ jobs:
             if !RETRY! lss 3 (
               timeout /t 10 /nobreak
               goto sync_loop
-            ) else (
-              exit /b 1
-            )
+            ) else exit /b 1
           )
 
           call gclient runhooks
@@ -115,21 +111,7 @@ jobs:
             $content = $content -replace '"-Wno-shadow",?', ''
             $content = $content -replace '-Wno-shadow', ''
             Set-Content $path $content -NoNewline
-            Write-Host "=== Patched pffft BUILD.gn ==="
-          }
-
-      # ★★★ 新增：把 C++ 标准升到 C++20
-      - name: Patch C++ standard to C++20
-        shell: pwsh
-        run: |
-          $path = "D:\webrtc\src\build\config\compiler\BUILD.gn"
-          if (Test-Path $path) {
-            $content = Get-Content $path -Raw
-            $content = $content -replace '/std:c\+\+17', '/std:c++20'
-            $content = $content -replace '-std=c\+\+17', '-std=c++20'
-            Set-Content $path $content -NoNewline
-            Write-Host "=== Patched C++ standard ==="
-            Get-Content $path | Select-String -Pattern "c\+\+17|c\+\+20"
+            Write-Host "pffft patched"
           }
 
       - name: gn gen
@@ -141,20 +123,34 @@ jobs:
           if not exist out\x86_mt\build.ninja exit /b 1
           echo gn gen OK
 
-      - name: Build all
+      # 打印 audio_processing 相关 targets（调试用）
+      - name: List audio_processing targets
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-          call ninja -C out/x86_mt
+          call gn ls out/x86_mt | findstr /i "audio_processing"
+
+      # ★ 只编 audio_processing 相关目录
+      - name: Build audio_processing only
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+
+          :: 核心：编 modules/audio_processing 下所有 target
+          call ninja -C out/x86_mt modules/audio_processing
+
+          :: 依赖
+          call ninja -C out/x86_mt common_audio
+          call ninja -C out/x86_mt rtc_base
+          call ninja -C out/x86_mt system_wrappers
+          call ninja -C out/x86_mt api
 
       - name: Package libs and headers
         shell: pwsh
         run: |
           $src = "D:\webrtc\src"
-
-          Write-Host "=== ALL LIBS COUNT ==="
-          (Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib").Count
 
           New-Item -ItemType Directory -Force -Path D:\out\libs | Out-Null
           Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
@@ -177,9 +173,18 @@ jobs:
           Write-Host "=== LIBS COUNT ==="
           (Get-ChildItem D:\out\libs).Count
 
-          Write-Host "=== audio_processing / aec3 相关 ==="
-          Get-ChildItem D:\out\libs -Filter "*audio_processing*" | Select-Object Name
-          Get-ChildItem D:\out\libs -Filter "*aec3*" | Select-Object Name
+          Write-Host "=== audio_processing 相关 lib ==="
+          Get-ChildItem D:\out\libs | Where-Object { $_.Name -match "audio_processing|aec3|agc|ns|vad|api|buffer|high_pass" } |
+            Select-Object Name,Length
+
+          # ★ 关键验证：AudioProcessingBuilder 在哪个 lib
+          Write-Host "=== Searching AudioProcessingBuilder symbol ==="
+          Get-ChildItem D:\out\libs -Filter "*.lib" | ForEach-Object {
+            $result = & "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe" /linkermember $_.FullName 2>$null | Select-String "AudioProcessingBuilder"
+            if ($result) {
+              Write-Host "FOUND in: $($_.Name)"
+            }
+          }
 
       - name: Upload libs
         uses: actions/upload-artifact@v4
