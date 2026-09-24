@@ -79,7 +79,6 @@ jobs:
           )
 
           if not exist src\DEPS exit /b 1
-
           cd src
           call git checkout -b m100 branch-heads/4896
           cd ..
@@ -91,7 +90,6 @@ jobs:
             set /a RETRY+=1
             if !RETRY! lss 3 ( timeout /t 10 /nobreak & goto sync_loop ) else exit /b 1
           )
-
           call gclient runhooks
           exit /b 0
 
@@ -120,128 +118,58 @@ jobs:
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src
-
           call ninja -k 0 -C out/x86_mt > D:\build.log 2>&1
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:throw_delegate
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/types:bad_optional_access
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/strings:strings
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:base
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:raw_logging_internal
-          call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnnoise
-          call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnn_vad
-          call ninja -k 0 -C out/x86_mt modules/audio_processing:rms_level
-          call ninja -k 0 -C out/x86_mt modules/audio_processing:audio_processing
+          call ninja -k 0 -C out/x86_mt modules/audio_processing
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp
+          call ninja -k 0 -C out/x86_mt third_party/rnnoise
           echo === build done ===
           exit /b 0
 
-      # ★★★ 自动搜索所有缺失符号的 .obj，打包成 webrtc_missing.lib
+      # ★★★ 打包整个目录的 obj
       - name: Pack all missing objs
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src\out\x86_mt
 
-          echo ============================================================
-          echo [0] 诊断：VS 装在哪
-          echo ============================================================
-          dir "C:\Program Files\Microsoft Visual Studio" /b 2>nul
-          dir "C:\Program Files\Microsoft Visual Studio\2022" /b 2>nul
-          dir "C:\Program Files (x86)\Microsoft Visual Studio\2022" /b 2>nul
-
-          echo.
-          echo ============================================================
-          echo [1] 用 vswhere 找 VS 安装路径
-          echo ============================================================
           set VSWHERE="C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
           set VSPATH=
-          for /f "usebackq tokens=*" %%i in (`%VSWHERE% -latest -property installationPath`) do (
-            set VSPATH=%%i
-          )
-          echo VSPATH=%VSPATH%
-
-          echo.
-          echo ============================================================
-          echo [2] 从 VSPATH 找 lib.exe
-          echo ============================================================
+          for /f "usebackq tokens=*" %%i in (`%VSWHERE% -latest -property installationPath`) do set VSPATH=%%i
           set LIBCMD=
           if defined VSPATH (
             for /d %%v in ("%VSPATH%\VC\Tools\MSVC\*") do (
-              if exist "%%v\bin\Hostx64\x86\lib.exe" (
-                set LIBCMD=%%v\bin\Hostx64\x86\lib.exe
-              )
+              if exist "%%v\bin\Hostx64\x86\lib.exe" set LIBCMD=%%v\bin\Hostx64\x86\lib.exe
             )
           )
           echo LIBCMD=%LIBCMD%
 
-          echo.
-          echo ============================================================
-          echo [3] 从 VSPATH 找 dumpbin.exe
-          echo ============================================================
-          set DUMPCMD=
-          if defined VSPATH (
-            for /d %%v in ("%VSPATH%\VC\Tools\MSVC\*") do (
-              if exist "%%v\bin\Hostx64\x64\dumpbin.exe" (
-                set DUMPCMD=%%v\bin\Hostx64\x64\dumpbin.exe
-              )
-            )
-          )
-          echo DUMPCMD=%DUMPCMD%
-
-          echo.
-          echo ============================================================
-          echo [4] 搜索所有需要打包的 obj
-          echo ============================================================
           if not exist D:\out\libs mkdir D:\out\libs
           set OBJLIST=D:\needed_objs.txt
           if exist %OBJLIST% del %OBJLIST%
 
-          echo --- rms_level ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\modules\audio_processing\*rms_level*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+          echo === audio_processing 全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\modules\audio_processing\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
 
-          echo --- internal_apm_config / apm_config ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\modules\audio_processing\*apm_config*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+          echo === abseil-cpp 全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
 
-          echo --- rnn_vad 全部 obj ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\modules\audio_processing\rnn_vad\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- abseil throw_delegate ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- abseil bad_optional_access ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- abseil string_view ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*string_view*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- abseil raw_logging ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*raw_logging*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- abseil strings 全部 ---
-          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\absl\strings\strings\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
-
-          echo --- rnnoise 全部 ---
+          echo === rnnoise 全部 obj ===
           for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\rnnoise\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+
+          echo === audio 目录全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\audio\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
 
           echo ===== OBJLIST 行数 =====
           find /c /v "" %OBJLIST%
 
-          echo.
-          echo ============================================================
-          echo [5] 打包 webrtc_missing.lib
-          echo ============================================================
           if not defined LIBCMD (
-            echo ERROR: LIBCMD 未定义，无法打包
+            echo ERROR: LIBCMD 未定义
             exit /b 1
           )
           "%LIBCMD%" /OUT:D:\out\libs\webrtc_missing.lib @%OBJLIST%
           echo lib.exe exit code: %errorlevel%
 
-          echo.
-          echo ============================================================
-          echo [6] 验证
-          echo ============================================================
           dir D:\out\libs\webrtc_missing.lib
-
           exit /b 0
 
       - name: Package libs and headers
@@ -275,20 +203,13 @@ jobs:
           if (Test-Path "D:\out\libs\webrtc_missing.lib") {
             $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
             $syms = @(
-              "RmsLevel",
-              "ThrowStdOutOfRange",
-              "throw_bad_optional_access",
-              "kInputDenseWeights",
-              "InternalAPMConfig",
-              "RawLog",
-              "FullyConnectedLayer",
-              "GatedRecurrentLayer",
-              "find@string_view"
+              "RmsLevel", "ThrowStdOutOfRange", "throw_bad_optional_access",
+              "kInputDenseWeights", "InternalAPMConfig", "RawLog",
+              "FullyConnectedLayer", "GatedRecurrentLayer", "find_first_of"
             )
             foreach ($s in $syms) {
               $hit = & $dumpbin /linkermember "D:\out\libs\webrtc_missing.lib" 2>$null | Select-String -SimpleMatch $s -Quiet
-              if ($hit) { Write-Host "FOUND $s" }
-              else { Write-Host "MISSING $s" }
+              if ($hit) { Write-Host "FOUND $s" } else { Write-Host "MISSING $s" }
             }
           }
 
