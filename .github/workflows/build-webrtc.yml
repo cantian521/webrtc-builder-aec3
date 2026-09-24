@@ -75,10 +75,7 @@ jobs:
           call D:\depot_tools\fetch.bat --nohooks webrtc
           if %errorlevel% neq 0 (
             set /a RETRY+=1
-            if !RETRY! lss 3 (
-              timeout /t 10 /nobreak
-              goto fetch_loop
-            ) else exit /b 1
+            if !RETRY! lss 3 ( timeout /t 10 /nobreak & goto fetch_loop ) else exit /b 1
           )
 
           if not exist src\DEPS exit /b 1
@@ -92,10 +89,7 @@ jobs:
           call gclient sync --nohooks
           if %errorlevel% neq 0 (
             set /a RETRY+=1
-            if !RETRY! lss 3 (
-              timeout /t 10 /nobreak
-              goto sync_loop
-            ) else exit /b 1
+            if !RETRY! lss 3 ( timeout /t 10 /nobreak & goto sync_loop ) else exit /b 1
           )
 
           call gclient runhooks
@@ -128,77 +122,80 @@ jobs:
           cd /d D:\webrtc\src
 
           call ninja -k 0 -C out/x86_mt > D:\build.log 2>&1
-          echo === default target done ===
-
           call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:throw_delegate
           call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/types:bad_optional_access
           call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/strings:strings
           call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:base
-          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/numeric:int128
+          call ninja -k 0 -C out/x86_mt third_party/abseil-cpp/absl/base:raw_logging_internal
           call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnnoise
           call ninja -k 0 -C out/x86_mt third_party/rnnoise:rnn_vad
           call ninja -k 0 -C out/x86_mt modules/audio_processing:rms_level
           call ninja -k 0 -C out/x86_mt modules/audio_processing:audio_processing
-
-          echo === extras done ===
+          echo === build done ===
           exit /b 0
 
-      # ★★★ 关键修复：用完整路径调用 lib.exe
-      - name: Diagnose and pack missing symbols
+      # ★★★ 自动搜索所有缺失符号的 .obj，打包成 webrtc_missing.lib
+      - name: Pack all missing objs
         shell: cmd
         run: |
           set PATH=D:\depot_tools;%PATH%
           cd /d D:\webrtc\src\out\x86_mt
 
-          echo ============================================================
-          echo [1] 诊断 .obj 是否存在
-          echo ============================================================
-          dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul
-          dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul
-          dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul
-          dir /s /b obj\third_party\rnnoise\*.obj 2>nul
-
-          echo.
-          echo ============================================================
-          echo [2] 找 lib.exe 的完整路径
-          echo ============================================================
+          :: 找 lib.exe
           set LIBCMD=
           for /f "delims=" %%i in ('dir /s /b "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x86\lib.exe" 2^>nul') do (
             if not defined LIBCMD set LIBCMD=%%i
           )
           echo LIBCMD=%LIBCMD%
 
-          echo.
-          echo ============================================================
-          echo [3] 打包 webrtc_missing.lib
-          echo ============================================================
-          set OBJFILE=objs_for_missing.txt
-          if exist %OBJFILE% del %OBJFILE%
-          dir /s /b obj\modules\audio_processing\*rms_level*.obj 2>nul >> %OBJFILE%
-          dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2>nul >> %OBJFILE%
-          dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2>nul >> %OBJFILE%
-          dir /s /b obj\third_party\rnnoise\*.obj 2>nul >> %OBJFILE%
-
-          echo ===== objs_for_missing.txt =====
-          type %OBJFILE%
+          :: 找 dumpbin.exe
+          set DUMPCMD=
+          for /f "delims=" %%i in ('dir /s /b "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" 2^>nul') do (
+            if not defined DUMPCMD set DUMPCMD=%%i
+          )
+          echo DUMPCMD=%DUMPCMD%
 
           if not exist D:\out\libs mkdir D:\out\libs
-          if not exist D:\out\objs mkdir D:\out\objs
+          set OBJLIST=D:\needed_objs.txt
+          if exist %OBJLIST% del %OBJLIST%
 
-          "%LIBCMD%" /OUT:D:\out\libs\webrtc_missing.lib @%OBJFILE%
-          echo ===== lib.exe exit code: %errorlevel% =====
+          echo === 搜索需要打包的 obj ===
 
-          :: 同时把 .obj 复制到 artifact，作为备份
-          copy /y obj\modules\audio_processing\rms_level\rms_level.obj D:\out\objs\ 2>nul
-          copy /y obj\third_party\abseil-cpp\absl\base\throw_delegate\throw_delegate.obj D:\out\objs\ 2>nul
-          copy /y obj\third_party\abseil-cpp\absl\types\bad_optional_access\bad_optional_access.obj D:\out\objs\ 2>nul
-          copy /y obj\third_party\rnnoise\rnn_vad\rnn_vad_weights.obj D:\out\objs\ 2>nul
+          :: 1. rms_level
+          for /f "delims=" %%f in ('dir /s /b obj\modules\audio_processing\*rms_level*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 2. internal_apm_config
+          for /f "delims=" %%f in ('dir /s /b obj\modules\audio_processing\*internal_apm_config*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 3. abseil throw_delegate
+          for /f "delims=" %%f in ('dir /s /b obj\third_party\abseil-cpp\*throw_delegate*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 4. abseil bad_optional_access
+          for /f "delims=" %%f in ('dir /s /b obj\third_party\abseil-cpp\*bad_optional_access*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 5. abseil string_view
+          for /f "delims=" %%f in ('dir /s /b obj\third_party\abseil-cpp\*string_view*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 6. abseil raw_logging
+          for /f "delims=" %%f in ('dir /s /b obj\third_party\abseil-cpp\*raw_logging*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 7. rnnoise 所有 obj
+          for /f "delims=" %%f in ('dir /s /b obj\third_party\rnnoise\*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          :: 8. rnn_vad 所有 obj（在 modules/audio_processing/rnn_vad 下）
+          for /f "delims=" %%f in ('dir /s /b obj\modules\audio_processing\rnn_vad\*.obj 2^>nul') do echo %%f >> %OBJLIST%
+
+          echo ===== OBJLIST content =====
+          type %OBJLIST%
 
           echo.
-          echo ===== D:\out\libs\webrtc_missing.lib =====
-          dir D:\out\libs\webrtc_missing.lib 2>nul
-          echo ===== D:\out\objs =====
-          dir D:\out\objs
+          echo ===== 打包 webrtc_missing.lib =====
+          "%LIBCMD%" /OUT:D:\out\libs\webrtc_missing.lib @%OBJLIST%
+          echo lib.exe exit code: %errorlevel%
+
+          echo.
+          echo ===== 验证 =====
+          dir D:\out\libs\webrtc_missing.lib
 
           exit /b 0
 
@@ -209,7 +206,7 @@ jobs:
 
           New-Item -ItemType Directory -Force -Path D:\out\libs | Out-Null
           Get-ChildItem -Path "$src\out\x86_mt\obj" -Recurse -Filter "*.lib" |
-            Copy-Item -Destination D:\out\libs
+            Copy-Item -Destination D:\out\libs -Force
 
           $dst = "D:\out\headers"
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
@@ -232,14 +229,22 @@ jobs:
           Write-Host "=== webrtc_missing.lib 符号检查 ==="
           if (Test-Path "D:\out\libs\webrtc_missing.lib") {
             $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
-            $syms = @("RmsLevel", "ThrowStdOutOfRange", "throw_bad_optional_access", "kInputDenseWeights")
+            $syms = @(
+              "RmsLevel",
+              "ThrowStdOutOfRange",
+              "throw_bad_optional_access",
+              "kInputDenseWeights",
+              "InternalAPMConfig",
+              "RawLog",
+              "FullyConnectedLayer",
+              "GatedRecurrentLayer",
+              "find@string_view"
+            )
             foreach ($s in $syms) {
               $hit = & $dumpbin /linkermember "D:\out\libs\webrtc_missing.lib" 2>$null | Select-String -SimpleMatch $s -Quiet
-              if ($hit) { Write-Host "FOUND $s in webrtc_missing.lib" }
+              if ($hit) { Write-Host "FOUND $s" }
               else { Write-Host "MISSING $s" }
             }
-          } else {
-            Write-Host "webrtc_missing.lib 未生成"
           }
 
       - name: Upload libs
@@ -247,13 +252,6 @@ jobs:
         with:
           name: webrtc-m100-libs
           path: D:\out\libs\*.lib
-          retention-days: 30
-
-      - name: Upload objs (backup)
-        uses: actions/upload-artifact@v4
-        with:
-          name: webrtc-missing-objs
-          path: D:\out\objs
           retention-days: 30
 
       - name: Upload headers
