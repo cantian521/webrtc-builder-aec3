@@ -1,0 +1,240 @@
+name: Build WebRTC M100 x64
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 300
+
+    env:
+      DEPOT_TOOLS_WIN_TOOLCHAIN: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "C:\Program Files\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Microsoft SDKs\Azure" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Get-PSDrive C | Select-Object Used,Free
+
+      - name: Configure Git global
+        shell: cmd
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@example.com"
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+          git config --global core.fscache true
+
+      - name: Install depot_tools
+        shell: cmd
+        run: |
+          cd /d D:\
+          if exist depot_tools rmdir /s /q depot_tools
+          git clone --depth 1 https://chromium.googlesource.com/chromium/tools/depot_tools.git
+          echo D:\depot_tools>> %GITHUB_PATH%
+
+      - name: Bootstrap depot_tools
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\depot_tools
+          call update_depot_tools.bat
+          if not exist python3_bin_reldir.txt exit /b 1
+          echo Bootstrap OK
+
+      - name: Fetch WebRTC M100
+        shell: cmd
+        env:
+          DEPOT_TOOLS_UPDATE: 0
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          set VPATH=D:\depot_tools
+          set PYTHONPATH=D:\depot_tools;%PYTHONPATH%
+
+          if not exist D:\depot_tools\vpython.bat (
+            echo @echo off > D:\depot_tools\vpython.bat
+            echo call "%%~dp0python3.bat" %%* >> D:\depot_tools\vpython.bat
+          )
+
+          cd /d D:\
+          if exist webrtc rmdir /s /q webrtc
+          mkdir webrtc
+          cd webrtc
+
+          set RETRY=0
+          :fetch_loop
+          call D:\depot_tools\fetch.bat --nohooks webrtc
+          if %errorlevel% neq 0 (
+            set /a RETRY+=1
+            if !RETRY! lss 3 (
+              timeout /t 10 /nobreak
+              goto fetch_loop
+            ) else exit /b 1
+          )
+
+          if not exist src\DEPS exit /b 1
+
+          cd src
+          call git checkout -b m100 branch-heads/4896
+          cd ..
+
+          set RETRY=0
+          :sync_loop
+          call gclient sync --nohooks
+          if %errorlevel% neq 0 (
+            set /a RETRY+=1
+            if !RETRY! lss 3 (
+              timeout /t 10 /nobreak
+              goto sync_loop
+            ) else exit /b 1
+          )
+
+          call gclient runhooks
+          echo === runhooks exit code: %errorlevel% (ignored) ===
+          exit /b 0
+
+      - name: Patch pffft BUILD.gn
+        shell: pwsh
+        run: |
+          $path = "D:\webrtc\src\third_party\pffft\BUILD.gn"
+          if (Test-Path $path) {
+            $content = Get-Content $path -Raw
+            $content = $content -replace '"-Wno-shadow",?', ''
+            $content = $content -replace '-Wno-shadow', ''
+            Set-Content $path $content -NoNewline
+          }
+
+      # ★★★ 核心修改 1：target_cpu=x64，输出 out/x64_mt
+      - name: gn gen
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+          call gn gen out/x64_mt --args="is_debug=false target_cpu=\"x64\" is_clang=false is_component_build=false rtc_build_examples=false rtc_build_tools=false rtc_include_tests=false use_custom_libcxx=false treat_warnings_as_errors=false"
+          if not exist out\x64_mt\build.ninja exit /b 1
+          echo gn gen OK
+
+      - name: Build all + extras
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src
+
+          call ninja -k 0 -C out/x64_mt > D:\build.log 2>&1
+          call ninja -k 0 -C out/x64_mt modules/audio_processing
+          call ninja -k 0 -C out/x64_mt third_party/abseil-cpp
+          call ninja -k 0 -C out/x64_mt third_party/rnnoise
+          echo === build done ===
+          exit /b 0
+
+      # ★★★ 核心修改 2：x64 的 lib.exe 在 Hostx64\x64 下
+      - name: Pack missing objs
+        shell: cmd
+        run: |
+          set PATH=D:\depot_tools;%PATH%
+          cd /d D:\webrtc\src\out\x64_mt
+
+          set VSWHERE="C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          set VSPATH=
+          for /f "usebackq tokens=*" %%i in (`%VSWHERE% -latest -property installationPath`) do set VSPATH=%%i
+          set LIBCMD=
+          if defined VSPATH (
+            for /d %%v in ("%VSPATH%\VC\Tools\MSVC\*") do (
+              if exist "%%v\bin\Hostx64\x64\lib.exe" set LIBCMD=%%v\bin\Hostx64\x64\lib.exe
+            )
+          )
+          echo LIBCMD=%LIBCMD%
+
+          if not exist D:\out\x64_libs mkdir D:\out\x64_libs
+          set OBJLIST=D:\needed_objs.txt
+          if exist %OBJLIST% del %OBJLIST%
+
+          echo === audio_processing 全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\modules\audio_processing\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+
+          echo === abseil-cpp 全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\abseil-cpp\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+
+          echo === rnnoise 全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\third_party\rnnoise\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+
+          echo === audio 目录全部 obj ===
+          for /f "usebackq tokens=*" %%f in (`dir /s /b obj\audio\*.obj 2^>nul`) do echo %%f >> %OBJLIST%
+
+          echo ===== OBJLIST 行数 =====
+          find /c /v "" %OBJLIST%
+
+          if not defined LIBCMD (
+            echo ERROR: LIBCMD 未定义
+            exit /b 1
+          )
+          "%LIBCMD%" /OUT:D:\out\x64_libs\webrtc_missing.lib @%OBJLIST%
+          echo lib.exe exit code: %errorlevel%
+
+          dir D:\out\x64_libs\webrtc_missing.lib
+          exit /b 0
+
+      - name: Package libs and headers
+        shell: pwsh
+        run: |
+          $src = "D:\webrtc\src"
+
+          New-Item -ItemType Directory -Force -Path D:\out\x64_libs | Out-Null
+          Get-ChildItem -Path "$src\out\x64_mt\obj" -Recurse -Filter "*.lib" |
+            Copy-Item -Destination D:\out\x64_libs -Force
+
+          $dst = "D:\out\headers"
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          Get-ChildItem -Path $src -Recurse -Filter "*.h" -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '\\out\\' } |
+            ForEach-Object {
+              $rel = $_.FullName.Substring($src.Length + 1)
+              $targetFile = Join-Path $dst $rel
+              $targetDir  = Split-Path $targetFile
+              if (!(Test-Path $targetDir)) {
+                New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
+              }
+              Copy-Item $_.FullName -Destination $targetFile -Force
+            }
+
+          Write-Host "=== LIBS COUNT ==="
+          (Get-ChildItem D:\out\x64_libs).Count
+
+          Write-Host ""
+          Write-Host "=== webrtc_missing.lib 符号检查 ==="
+          if (Test-Path "D:\out\x64_libs\webrtc_missing.lib") {
+            $dumpbin = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC\14.44.35207\bin\Hostx64\x64\dumpbin.exe"
+            $syms = @(
+              "RmsLevel", "ThrowStdOutOfRange", "throw_bad_optional_access",
+              "kInputDenseWeights", "InternalAPMConfig", "RawLog",
+              "FullyConnectedLayer", "GatedRecurrentLayer", "find_first_of"
+            )
+            foreach ($s in $syms) {
+              $hit = & $dumpbin /linkermember "D:\out\x64_libs\webrtc_missing.lib" 2>$null | Select-String -SimpleMatch $s -Quiet
+              if ($hit) { Write-Host "FOUND $s" } else { Write-Host "MISSING $s" }
+            }
+          }
+
+      # ★★★ 核心修改 3：Artifact 名加 x64 标识
+      - name: Upload x64 libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-m100-x64-libs
+          path: D:\out\x64_libs\*.lib
+          retention-days: 30
+
+      - name: Upload x64 headers
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-m100-x64-headers
+          path: D:\out\headers
+          retention-days: 30
